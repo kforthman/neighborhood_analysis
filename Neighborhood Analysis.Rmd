@@ -1,0 +1,778 @@
+---
+title: "Neighborhood analysis"
+author: "Katie Clary"
+date: "3/2/2018"
+output:
+  html_document:
+    code_folding: hide
+    highlight: tango
+    theme: cerulean
+  word_document: default
+---
+```{r setup, include = F}
+knitr::opts_knit$set(root.dir = "/Volumes/T1000/Analysis/kforthman/Neighborhood_Analysis/Tract")
+```
+
+```{r, message = F, include = F}
+library(acs)
+library(stringr)
+library(e1071)
+library(psych)
+library(DMwR)
+library(randomcoloR)
+library(corrplot)
+library(ggplot2)
+library(lavaan)
+library(scales)
+library(RColorBrewer)
+library(GPArotation)
+```
+
+```{r, include = F}
+factorName_n <- function(factor){
+  c("African\nAmericans\nin Tract", 
+    "Seniors\nin Tract", 
+    "Singletons\nin Tract", 
+    "Affluence", 
+    "Noncitizens\nin Tract")[as.numeric(substr(factor, 3,3))]
+}
+factorName <- function(factor){
+  c("African Americans in Tract", 
+    "Seniors in Tract", 
+    "Singletons in Tract", 
+    "Affluence", 
+    "Noncitizens in Tract")[as.numeric(substr(factor, 3,3))]
+}
+stateName <- read.csv("data/state_code.csv")
+stateCodes <- str_pad(as.character(stateName[,2]), 2, "left", pad = " ")
+```
+
+```{r, collapse=F}
+endyear = 2015
+nfactors = 5
+```
+
+# Selecting variables
+Alters the original matrix to be more suited for the factor analysis. Renames variables, throws out certain variables, and alters some variables to be percentages. Additionaly, gets rid of all tracts with a population of zero.
+```{r, eval = F, include=T}
+
+# Alters the original matrix to be more suited for the factor analysis.
+# Renames variables, throws out certain variables, and alters some variables to be percentages.
+# Additionaly, gets rid of all tracts with a population of zero.
+
+# Read in the original matrix.
+original <- read.csv(paste0("output/2015/useful_ACS_originalData.csv"), row.names = 1)
+
+# If the state code is only a single digit, it is padded.
+rownames(original) <- str_pad(rownames(original), 11, "left", pad="0")
+
+# Define the number of tracts
+n <- dim(original)[1]
+
+# --- Now, begin adding variables to a new matrix and changing them as needed. --- #
+
+# Total population ----
+condensed <- original['Total']
+
+# Age and gender ----
+Males.age <- c("Male...Under.5.years","Male...5.to.9.years","Male...10.to.14.years","Male...15.to.17.years",
+               "Male...18.and.19.years","Male...20.years","Male...21.years","Male...22.to.24.years",
+               "Male...25.to.29.years","Male...30.to.34.years","Male...35.to.39.years","Male...40.to.44.years",
+               "Male...45.to.49.years","Male...50.to.54.years","Male...55.to.59.years","Male...60.and.61.years",
+               "Male...62.to.64.years","Male...65.and.66.years","Male...67.to.69.years","Male...70.to.74.years",
+               "Male...75.to.79.years","Male...80.to.84.years","Male...85.years.and.over")
+
+Females.age <- c("Female...Under.5.years","Female...5.to.9.years","Female...10.to.14.years",
+                 "Female...15.to.17.years","Female...18.and.19.years","Female...20.years",
+                 "Female...21.years","Female...22.to.24.years","Female...25.to.29.years",
+                 "Female...30.to.34.years","Female...35.to.39.years","Female...40.to.44.years",
+                 "Female...45.to.49.years","Female...50.to.54.years","Female...55.to.59.years",
+                 "Female...60.and.61.years","Female...62.to.64.years","Female...65.and.66.years",
+                 "Female...67.to.69.years","Female...70.to.74.years","Female...75.to.79.years",
+                 "Female...80.to.84.years","Female...85.years.and.over")
+
+Age <- original[Males.age]+original[Females.age]
+for(i in 1:n){
+  Age[i,] <- c(2.5,7,12,16,18.5,20,21,23,27,32,37,42,47,52,57,60.5,63,65.5,68,72,77,82,85) * Age[i,]
+}
+Age <- rowSums(Age)
+Age <- Age/original["Total..Sex.by.age"]
+condensed['Age'] <- Age
+
+# Race ----
+condensed['Total..Race'] <- original['Total...Race']
+
+condensed['White'] <- original['White.alone']/original['Total...Race']
+
+condensed['Black'] <- original['Black.or.African.American.alone']/original['Total...Race']
+
+condensed['Asian'] <- original['Asian.alone']/original['Total...Race']
+
+condensed['Some.other.race'] <- ((original['Some.other.race.alone'] + 
+                                    original['Native.Hawaiian.and.Other.Pacific.Islander.alone'] +
+                                    original['American.Indian.and.Alaska.Native.alone'])
+                                 /original['Total...Race'])
+
+# Ethnicity ----
+condensed['Total..Hispanic.or.Latino'] <- original['Total...Hispanic.or.Latino.by.Specific.Origin']
+
+condensed['Hispanic.or.Latino'] <- original['Hispanic.or.Latino.']/original['Total...Hispanic.or.Latino.by.Specific.Origin']
+
+# Nativity, citizenship, and mobility ----
+condensed['Total...Nativity.and.Citizenship.Status'] <- original['Total...Nativity.and.Citizenship.Status.in.the.United.States']
+
+condensed['Not.US.citizen'] <- ((original['Not.a.U.S..citizen'] 
+                                 /original['Total...Nativity.and.Citizenship.Status.in.the.United.States']))
+
+# Mobility ----
+
+condensed['Total...Geographical.Mobility.in.the.Past.Year'] <- original['Total...Geographical.Mobility.in.the.Past.Year.by.Citizenship.Status.for.Current.Residence.in.the.U.S.']
+
+condensed['Moved.in.past.year'] <- 1 - (original['Same.house.1.year.ago.']/original['Total...Geographical.Mobility.in.the.Past.Year.by.Citizenship.Status.for.Current.Residence.in.the.U.S.'])
+
+# Transportation to work ----
+condensed['Total..Means.of.Transportation.to.Work'] <- original['Total...Means.of.Transportation.to.Work']
+
+condensed['Drove'] <- ((original['Car..truck..or.van.']+
+                          original['Motorcycle']) / 
+                         original['Total...Means.of.Transportation.to.Work'])
+
+condensed['Bicycle.or.walked'] <- ((original['Bicycle'] + original['Walked']) / 
+                                     original['Total...Means.of.Transportation.to.Work'])
+
+# Time left for work ----
+condensed['Total..Time.Leaving.Home.to.Go.to.Work'] <- original['Total...Time.Leaving.Home.to.Go.to.Work']
+
+Time.Leaving.Home.to.Go.to.Work <- c("X12.00.a.m..to.4.59.a.m.", "X5.00.a.m..to.5.29.a.m.", "X5.30.a.m..to.5.59.a.m.", "X6.00.a.m..to.6.29.a.m.", 
+                                     "X6.30.a.m..to.6.59.a.m.", "X7.00.a.m..to.7.29.a.m.", "X7.30.a.m..to.7.59.a.m.", "X8.00.a.m..to.8.29.a.m.", 
+                                     "X8.30.a.m..to.8.59.a.m.", "X9.00.a.m..to.9.59.a.m.", "X10.00.a.m..to.10.59.a.m.", "X11.00.a.m..to.11.59.a.m.", 
+                                     "X12.00.p.m..to.3.59.p.m.", "X4.00.p.m..to.11.59.p.m.")
+Time.Leaving.Home.to.Go.to.Work <- original[Time.Leaving.Home.to.Go.to.Work]
+for(i in 1:n){
+  Time.Leaving.Home.to.Go.to.Work[i,] <- c(0,5,5.5,6,6.5,7,7.5,8,8.5,9,10,11,12,16) * Time.Leaving.Home.to.Go.to.Work[i,]
+}
+Time.Leaving.Home.to.Go.to.Work <- rowSums(Time.Leaving.Home.to.Go.to.Work)
+Time.Leaving.Home.to.Go.to.Work <- Time.Leaving.Home.to.Go.to.Work/original['Total...Time.Leaving.Home.to.Go.to.Work']
+condensed['Time.leaving.home'] <- Time.Leaving.Home.to.Go.to.Work
+
+# Time spent traveling to work ----
+condensed['Total..Travel.Time.to.Work'] <- original['Total...Travel.Time.to.Work']
+
+Travel.Time.to.Work <- c("Less.than.5.minutes", "X5.to.9.minutes", "X10.to.14.minutes", 
+                         "X15.to.19.minutes", "X20.to.24.minutes", "X25.to.29.minutes", 
+                         "X30.to.34.minutes", "X35.to.39.minutes", "X40.to.44.minutes",
+                         "X45.to.59.minutes", "X60.to.89.minutes", "X90.or.more.minutes")
+Travel.Time.to.Work <- original[Travel.Time.to.Work]
+for(i in 1:n){
+  Travel.Time.to.Work[i,] <- c(3, 7, 12, 17, 22, 27, 32, 37, 42, 47, 74.5, 90) * Travel.Time.to.Work[i,]
+}
+Travel.Time.to.Work <- rowSums(Travel.Time.to.Work)
+Travel.Time.to.Work <- Travel.Time.to.Work/original['Total...Travel.Time.to.Work']
+condensed['Travel.time.to.work'] <- Travel.Time.to.Work
+
+# Household type ----
+condensed['Total..Household.Type'] <- original['Total...Household.Type..including.Living.Alone.']
+
+condensed['Single.moms'] <- original['Family.households...Other.family...Female.householder..no.husband.present']/original['Total...Household.Type..including.Living.Alone.']
+
+condensed['Lives.alone'] <- original['Nonfamily.households...Householder.living.alone']/original['Total...Household.Type..including.Living.Alone.']
+
+condensed['Nonfamily.household'] <- original['Nonfamily.households...Householder.not.living.alone']/original['Total...Household.Type..including.Living.Alone.']
+
+# Marital status ----
+condensed['Total..Marital.Status.for.the.Population.15.Years.and.over'] <- original['Total...Sex.by.Marital.Status.for.the.Population.15.Years.and.over']
+
+Males.marital.status <- c("Male...Never.married", 
+                          "Male...Now.married...Married..spouse.present",
+                          "Male...Now.married...Married..spouse.absent.", 
+                          "Male...Widowed", "Male...Divorced")
+
+Females.marital.status <- c("Female...Never.married", 
+                            "Female...Now.married...Married..spouse.present",
+                            "Female...Now.married...Married..spouse.absent.", 
+                            "Female...Widowed", "Female...Divorced")
+
+Males.marital.status <- original[Males.marital.status]
+Females.marital.status <- original[Females.marital.status]
+
+Marital.status <- Males.marital.status + Females.marital.status
+
+names(Marital.status) <- c("Never.married", 
+                           "Married.spouse.present", 
+                           "Married.spouse.absent", 
+                           "Widowed", "Divorced")
+
+for(i in 1:ncol(Marital.status)){
+  Marital.status[,i] <- Marital.status[,i]/original['Total...Sex.by.Marital.Status.for.the.Population.15.Years.and.over']
+}
+
+condensed[names(Marital.status)] <- Marital.status
+
+
+
+# Education Level ----
+condensed['Total...Educational.Attainment.for.the.Population.25.Years.and.Over'] <- original['Total...Educational.Attainment.for.the.Population.25.Years.and.Over']
+
+Educational.Attainment <- c("No.schooling.completed", "Nursery.school", "Kindergarten", "X1st.grade", "X2nd.grade",
+                            "X3rd.grade", "X4th.grade", "X5th.grade", "X6th.grade", "X7th.grade",
+                            "X8th.grade", "X9th.grade", "X10th.grade", "X11th.grade", "X12th.grade..no.diploma",
+                            "GED.or.alternative.credential", "Regular.high.school.diploma", "Some.college..less.than.1.year",
+                            "Some.college..1.or.more.years..no.degree", "Associate.s.degree",
+                            "Bachelor.s.degree", "Master.s.degree", "Professional.school.degree", "Doctorate.degree")
+
+Educational.Attainment <- original[Educational.Attainment]
+
+for(i in 1:n){
+  Educational.Attainment[i,] <- ((0 * sum(Educational.Attainment[i,1:15]) +
+                                    1 * sum(Educational.Attainment[i,16:20]) +
+                                    2 * sum(Educational.Attainment[i,21:24]))
+                                 /original[i, 'Total...Educational.Attainment.for.the.Population.25.Years.and.Over'])
+}
+
+Educational.Attainment <- Educational.Attainment[,2]
+
+condensed['Education'] <- Educational.Attainment
+
+# Disability status ----
+condensed['Total...Sex.by.Age.by.Disability.Status'] <- original['Total...Sex.by.Age.by.Disability.Status']
+
+Male.withDisability <- c("Male...Under.5.years...With.a.disability",
+                         "Male...5.to.17.years...With.a.disability",
+                         "Male...18.to.34.years...With.a.disability",
+                         "Male...35.to.64.years...With.a.disability",
+                         "Male...65.to.74.years...With.a.disability",
+                         "Male...75.years.and.over...With.a.disability")
+
+Female.withDisability <- c("Female...Under.5.years...With.a.disability",
+                           "Female...5.to.17.years...With.a.disability",
+                           "Female...18.to.34.years...With.a.disability",
+                           "Female...35.to.64.years...With.a.disability",
+                           "Female...65.to.74.years...With.a.disability",
+                           "Female...75.years.and.over...With.a.disability")
+
+Male.withDisability <- original[Male.withDisability]
+Female.withDisability <- original[Female.withDisability]
+
+Male.withDisability <- rowSums(Male.withDisability)
+Female.withDisability <- rowSums(Female.withDisability)
+
+Disabled <- (Male.withDisability + Female.withDisability)/original['Total...Sex.by.Age.by.Disability.Status']
+
+condensed['Disabled'] <- Disabled
+
+# Income ----
+condensed['Total..Household.Income.in.the.Past.12.Months..in.2015.Inflation.Adjusted.Dollars.'] <- original['Total..Household.Income.in.the.Past.12.Months..in.2015.Inflation.Adjusted.Dollars.']
+
+Household.Income <- c("Less.than..10.000", "X.10.000.to..14.999", "X.15.000.to..19.999", 
+                      "X.20.000.to..24.999", "X.25.000.to..29.999", "X.30.000.to..34.999", 
+                      "X.35.000.to..39.999", "X.40.000.to..44.999", "X.45.000.to..49.999",
+                      "X.50.000.to..59.999", "X.60.000.to..74.999", "X.75.000.to..99.999", 
+                      "X.100.000.to..124.999", "X.125.000.to..149.999", "X.150.000.to..199.999", 
+                      "X.200.000.or.more")
+
+Household.Income <- original[Household.Income]
+
+for(i in 1:n){
+  Household.Income[i,] <- c(4999.5,12499.5,17499.5,22499.5,27499.5,32499.5,37499.5,42499.5,
+                            47499.5,54999.5,67499.5,87499.5,112499.5,137499.5,174999.5,200000) * Household.Income[i,]
+}
+Household.Income <- rowSums(Household.Income)
+Household.Income <- Household.Income/original['Total..Household.Income.in.the.Past.12.Months..in.2015.Inflation.Adjusted.Dollars.']
+condensed['Income'] <- Household.Income
+
+# Social security ----
+condensed['Total..Social.Security.Income.for.Households'] <- original['Total...Social.Security.Income.for.Households']
+
+condensed['w.Social.Security'] <- original['With.Social.Security.income']/original['Total...Social.Security.Income.for.Households']
+
+# Supplementary security income ----
+condensed['Total..Supplemental.Security.Income.for.Households'] <- original['Total...Supplemental.Security.Income..SSI..for.Households']
+
+condensed['w.SSI'] <- original['With.Supplemental.Security.Income..SSI.']/original['Total...Supplemental.Security.Income..SSI..for.Households']
+
+# Public assistance ----
+condensed['Total..Public.Assistance.Income.for.Households'] <- original['Total...Public.Assistance.Income.for.Households']
+
+condensed['w.PAI'] <- original['With.public.assistance.income']/original['Total...Public.Assistance.Income.for.Households']
+
+# Retirement income ----
+condensed['Total..Retirement.Income.for.Households'] <- original['Total...Retirement.Income.for.Households']
+
+condensed['w.Retirement.income'] <- original['With.retirement.income']/original['Total...Retirement.Income.for.Households']
+
+condensed['Retirement.income'] <- original['Per.capita.income.in.the.past.12.months..in.2015.Inflation.adjusted.dollars.']
+
+# Employment status ----
+condensed['Total...Employment.Status.for.the.Population.16.Years.and.Over'] <- original['Total...Employment.Status.for.the.Population.16.Years.and.Over']
+
+condensed['Unemployed'] <- original['In.labor.force...Civilian.labor.force...Unemployed']/original['Total...Employment.Status.for.the.Population.16.Years.and.Over']
+
+condensed['Not.in.labor.force'] <- original['Not.in.labor.force']/original['Total...Employment.Status.for.the.Population.16.Years.and.Over']
+# Occupancy status ----
+condensed['Total..Occupancy.Status'] <- original['Total...Occupancy.Status']
+
+condensed['Vacant'] <- original['Vacant']/original['Total...Occupancy.Status']
+
+# Tenure ----
+condensed['Total..Tenure'] <- original['Total...Tenure']
+
+condensed['Not.owner.occupied'] <- 1 - (original['Owner.occupied']/original['Total...Tenure'])
+
+# Number of rooms ----
+condensed['Median.number.of.rooms'] <- original['Median.number.of.rooms']
+
+# Units in structure, home type, and home age ----
+condensed['Total..Units.in.Structure'] <- original['Total...Units.in.Structure']
+
+Units.in.structure <- c("X1..detached", "X1..attached", "X2", "X3.or.4", "X5.to.9", "X10.to.19", "X20.to.49", "X50.or.more")
+Units.in.structure <- original[Units.in.structure]
+for(i in 1:n){
+  Units.in.structure[i,] <- c(1, 1, 2, 3.5, 7, 14.5, 34.5, 50) * Units.in.structure[i,]
+}
+Units.in.structure <- rowSums(Units.in.structure)
+condensed['Units.in.structure'] <- Units.in.structure / (original['Total...Units.in.Structure']-
+                                                           original['Mobile.home'] - original['Boat..RV..van..etc.'])
+
+
+condensed['Mobile.home'] <- (original['Mobile.home'] + original['Boat..RV..van..etc.']) / original['Total...Units.in.Structure']
+
+# Kitchen facilities ----
+condensed['Total..Kitchen.facilities'] <- original['Total...KITCHEN.FACILITIES.FOR.ALL.HOUSING.UNITS']
+
+condensed['Incomplete.kitchen'] <- 1 - (original['Complete.kitchen.facilities']/original['Total...KITCHEN.FACILITIES.FOR.ALL.HOUSING.UNITS'])
+
+# Rent cost ----
+condensed['Total..Contract.Rent'] <- original['Total..Contract.Rent']
+
+Rent <- c("With.cash.rent...Less.than..100", "With.cash.rent....100.to..149", "With.cash.rent....150.to..199", 
+          "With.cash.rent....200.to..249", "With.cash.rent....250.to..299", "With.cash.rent....300.to..349",
+          "With.cash.rent....350.to..399", "With.cash.rent....400.to..449", "With.cash.rent....450.to..499", 
+          "With.cash.rent....500.to..549", "With.cash.rent....550.to..599", "With.cash.rent....600.to..649",
+          "With.cash.rent....650.to..699", "With.cash.rent....700.to..749", "With.cash.rent....750.to..799", 
+          "With.cash.rent....800.to..899", "With.cash.rent....900.to..999", "With.cash.rent....1.000.to..1.249",
+          "With.cash.rent....1.250.to..1.499", "With.cash.rent....1.500.to..1.999", "With.cash.rent....2.000.to..2.499", 
+          "With.cash.rent....2.500.to..2.999", "With.cash.rent....3.000.to..3.499", "With.cash.rent....3.500.or.more")
+Rent <- original[Rent]
+for(i in 1:n){
+  Rent[i,] <- c(49.5,124.5,174.5,224.5,274.5,324.5,374.5,424.5,474.5,524.5,574.5,624.5,674.5,724.5,774.5,849.5,949.5,1124.5,
+                1374.5,1749.5,2249.5,2749.5,3249.5,3500) * Rent[i,]
+}
+Rent <- rowSums(Rent)
+Rent <- Rent/original['With.cash.rent.']
+condensed['Cash.rent.cost'] <- Rent
+
+# Home value ----
+condensed['Total..Value'] <- original['Total..Value']
+
+Home.value <- c("Less.than..10.000.1", "X.10.000.to..14.999.1", "X.15.000.to..19.999.1", "X.20.000.to..24.999.1", "X.25.000.to..29.999.1", "X.30.000.to..34.999.1", "X.35.000.to..39.999.1",
+                "X.40.000.to..49.999", "X.50.000.to..59.999.1", "X.60.000.to..69.999", "X.70.000.to..79.999", "X.80.000.to..89.999", "X.90.000.to..99.999", "X.100.000.to..124.999.1",
+                "X.125.000.to..149.999.1", "X.150.000.to..174.999", "X.175.000.to..199.999", "X.200.000.to..249.999", "X.250.000.to..299.999", "X.300.000.to..399.999", "X.400.000.to..499.999",
+                "X.500.000.to..749.999", "X.750.000.to..999.999", "X.1.000.000.to..1.499.999", "X.1.500.000.to..1.999.999", "X.2.000.000.or.more")
+Home.value <- original[Home.value]
+for(i in 1:n){
+  Home.value[i,] <- c(4999.5,12499.5,17499.5,22499.5,27499.5,32499.5,37499.5,44999.5,54999.5,64999.5,
+                      74999.5,84999.5,94999.5,112499.5,137499.5,162499.5,187499.5,224999.5,274999.5,
+                      349999.5,449999.5,624999.5,874999.5,1250000,1750000,2000000) * Home.value[i,]
+}
+Home.value <- rowSums(Home.value)
+Home.value <- Home.value/original['Total..Value']
+condensed['Home.value'] <- Home.value
+
+# Morgage status ----
+condensed['Total..Mortgage.status'] <- original['Total...MORTGAGE.STATUS']
+
+condensed['Mortgage'] <- original['Housing.units.with.a.mortgage..contract.to.purchase..or.similar.debt.']/original['Total...MORTGAGE.STATUS']
+
+# ----
+
+# Remove all tracts with a total population of zero.
+condensed <- condensed[which(condensed[,"Total"] > 0),]
+# Get rid of vectors containing Totals
+condensed <- condensed[,!grepl("Total", names(condensed))]
+
+# Create the cleaned up matrix
+#write.csv(condensed, paste0("useful_ACS_condensedData.csv"))
+
+```
+
+# Transforming variables
+This chunk finds the optimal transformation for normalization of each of the variables and outputs a matrix of the transformed data.
+```{r, eval = F, include=T}
+
+# This function finds the optimal transformation for normalization of each of the variables
+# and outputs a matrix of the transformed data.
+
+# Grab the altered ACS matrix
+mydata <- read.csv("useful_ACS_condensedData.csv", row.names = 1)
+
+# Define the number of tracts and the number of variables.
+n <- dim(mydata)[1]
+nvar <- dim(mydata)[2]
+
+# Create an empty matrix to store the transformed variables.
+trans_data <- matrix(nrow = n, ncol = 0)
+
+# n_trans_val is the number of different strengths of transformation we want to test
+# for getting the most normal curve.
+n_trans_val <- 50
+
+# Data is 'bent' so that is is curved in a particular direction.
+# Right skewed data will be bent so that they curve concave down.
+# Left skewed data will be bent so that they curve concave up.
+for(i in 1:nvar){
+  var_obs <- mydata[,i]
+  
+  var_obs_skewness <- round(skewness(var_obs, na.rm = T), 1)
+  
+  m <- max(var_obs, na.rm = T)
+  # The transformation values alter the strength of the transformation. The larger the 
+  # trans_val is, the less strong the transformation will be.
+  trans_val <- seq(0, m, length.out = n_trans_val+1)
+  trans_val <- trans_val[2:(n_trans_val+1)]
+  # The trans values are given a logarithmic step scale. This is because
+  # smaller values have a larger incremental effect on the transformation
+  # strength.
+  trans_val <- (m*(exp(5*trans_val/m) - 1)) / (exp(5) - 1)
+  
+  # Now, the function does one transformation with variables skewed to the right
+  # and the opposite transformation for variables skewed to the left.
+  if(var_obs_skewness > 1){
+    
+    # The function that transforms the variables has different effects for
+    # different values of the trans_val. For smaller values of trans_val,
+    # the transformation function will have a stronger effect on the variable's
+    # distribution.
+    trans_func <- function(trans_val){
+      h <- m/(log(m+trans_val)-log(trans_val))
+      var_obs_trans <- h*(log(var_obs + trans_val) - log(trans_val))
+      return(var_obs_trans)
+    }
+    
+    # Each column of the following matrix is a transformation of a different strength.
+    var_obs_trans_mat <- sapply(trans_val, trans_func)
+    colnames(var_obs_trans_mat) <- trans_val #round(trans_val, 1)
+    # The kurtosis is found for each strength of transformation.
+    kurt <- sapply(seq(1,n_trans_val), function(x){kurtosis(var_obs_trans_mat[,x], na.rm = T)})
+    
+    kurt_min_loc <- which.min(abs(kurt))
+    var_obs_trans <- as.matrix(var_obs_trans_mat[,kurt_min_loc])
+    
+  }else if(var_obs_skewness < -1){
+    
+    # This function is the same as the one above, but flipped on the y=x axis.
+    trans_func <- function(trans_val){
+      h <- m/(log(m+trans_val)-log(trans_val))
+      var_obs_trans <-  exp(var_obs/h + log(trans_val)) - trans_val
+      return(var_obs_trans)
+    }
+    
+    var_obs_trans_mat <- sapply(trans_val, trans_func)
+    colnames(var_obs_trans_mat) <- trans_val #round(trans_val, 1)
+    kurt <- sapply(seq(1,n_trans_val), function(x){kurtosis(var_obs_trans_mat[,x], na.rm = T)})
+    
+    kurt_min_loc <- which.min(abs(kurt))
+    var_obs_trans <- as.matrix(var_obs_trans_mat[,kurt_min_loc])
+    
+  }else{
+    
+    # If the variable is not that skewed, it is not transformed.
+    var_obs_trans <- var_obs
+  }
+  
+  # If the observations are supposed to be of zero mean and unit variance, they are scaled.
+  var_obs_trans <- scale(var_obs_trans)
+  
+  # Binds the transformed variable to a new matrix.
+  trans_data <- cbind(trans_data, matrix(var_obs_trans))
+}
+
+trans_data <- knnImputation(trans_data)
+
+colnames(trans_data) <- names(mydata)
+rownames(trans_data) <- rownames(mydata)
+#write.csv(trans_data, "useful_ACS_transformedData.csv")
+```
+
+# Factor Analysis
+This chunk does the exploratory factor analysis.
+```{r}
+# ------- Import dataset ------- #
+useful_ACS_transformedData <- as.matrix(read.csv("useful_ACS_transformedData.csv", row.names = 1))
+
+# ------- Maximum Likelihood Factor Analysis ------- #
+# entering data and extracting factors, 
+# with varimax rotation 
+
+# Create fit using PSYCH package
+FA_Results <- fa(useful_ACS_transformedData, nfactors = nfactors, rotate="oblimin", fm = 'minres')
+print(FA_Results, digits=2, cutoff=.3, sort=TRUE)
+```
+
+# Bootstrap resampling
+```{r, eval = F}
+p <- dim(FA_Results$loadings)[1]
+
+colnames(FA_Results$loadings) <- factorName(colnames(FA_Results$loadings))
+
+list_bootload <- list()
+
+for(i in 1:2000){
+  my_samp <- sample.int(nrow(useful_ACS_transformedData), nrow(useful_ACS_transformedData), replace = TRUE)
+  
+  my_boot <- useful_ACS_transformedData[my_samp,]
+  
+  #write.csv(my_boot, paste0("bootstrap/data/bootstrap_", i, ".csv"))
+  
+  print(paste("Matrix", i, "saved."))
+  
+  boot_fa <- fa(my_boot, nfactors = nfactors, rotate= "oblimin", fm = 'minres')
+  
+  print(paste("FA", i, "complete."))
+  
+  all_boot_cor <- matrix(nrow = nfactors, ncol = nfactors)
+  
+  for(j in 1:nfactors){
+    for(k in 1:nfactors){
+      all_boot_cor[j,k] <- cor(FA_Results$loadings[,j], boot_fa$loadings[,k])
+    }
+  }
+  
+  my.order <- sapply(c(1:nfactors), function(x){which.max(all_boot_cor[,x])})
+  
+  colnames(boot_fa$loadings) <- colnames(FA_Results$loadings)[my.order]
+  
+  #saveRDS(boot_fa, paste0("bootstrap/fa/bootstrap_", i, ".rds"))
+  
+  list_bootload[[i]]  <- boot_fa$loadings[,c("Racial Homogeneity", "Senoirity", "Singleton", "Affluence", "Citizenship")]
+}
+
+sum <- matrix(0, nrow = p, ncol = nfactors)
+for (i in 1:2000){
+  sum <- sum + list_bootload[[i]]
+}
+
+mean <- sum/2000
+
+sum2 <- matrix(0, nrow = p, ncol = nfactors)
+for (i in 1:2000){
+  sum2 <- sum2 + (list_bootload[[i]] - mean)^2
+}
+
+se <- sqrt(sum2/1999)
+
+#write.csv(se, "bootstrap_error.csv")
+```
+
+# Plotting the Factor Structure
+Plots the factor structure for the given model.
+```{r, fig.height=10, fig.width=10}
+error <- read.csv("bootstrap_error.csv", row.names = 1)
+
+# Each element in the following list stores a plot for one of the factors.
+myplots <- list()
+for(i in 1:nfactors){
+  p <- length(FA_Results$loadings[,i])
+  
+  mylabel <- names(FA_Results$loadings[,i])
+  labx <- seq(1, p)
+  laby <- seq(1.1, 1.1, length.out = p)
+  bgy <- seq(1, 1, length.out = p)
+  laba <- seq((90 - 360/p/2), by = -360/p, length.out = p) + c(seq(0, 0, length.out = floor(p/2)), seq(180, 180, length.out = ceiling(p/2)))
+  labj <-c(seq(0, 0, length.out = floor(p/2)), seq(1, 1, length.out = ceiling(p/2)))
+  
+  spoke_length <- c(1,5,1,1,4,3,5,1,1,6,2,6,3)
+  
+  sll <- length(spoke_length)
+  mycolors <- grDevices::rainbow(sll)
+  mycolors <- mycolors[c(1,8,2,9,3,10,4,11,5,12,6,13,7)]
+  spoke_x <- c(0.5)
+  for(j in 2:sll){
+    spoke_x[j] <- spoke_x[j-1] + spoke_length[j-1]
+  }
+  
+  varAlpha <- ifelse(abs(FA_Results$loadings[,i]) > 0.3, 1, 0.4)
+  varCol <- ifelse(FA_Results$loadings[,i] > 0, "turquoise1", "violetred1")
+  bgCol <- rep(c("grey92", "grey94", "grey96"), p)[1:p]
+  this_error <- error[,i]
+  
+  print(factorName_n(colnames(FA_Results$scores)[i]))
+  print(FA_Results$loadings[,i])
+  
+  df <- data.frame(var = seq(1,p), load = abs(FA_Results$loadings[,i]) , se = this_error)
+  
+  text.size <- 5
+  
+  ggp <- ggplot(df) + 
+    geom_bar(aes(x = var, y = bgy), stat = "identity", width = 1, fill = bgCol) + 
+    geom_bar(aes(x = var, y = load), stat = "identity", width = 1, fill = varCol, 
+             alpha = varAlpha) + 
+    geom_errorbar(aes(x = var, ymin = load - se, ymax = load + se), width = 0.5, color = "grey50", 
+                  size = text.size/12) +
+    scale_y_continuous(limits = c(-0.4, 1.5)) +
+    annotate("text", labx, laby, label = mylabel, angle = laba, 
+             size = text.size, col = "black", hjust = labj, alpha = varAlpha) +
+    annotate("text", 1, -0.4, 
+             label = paste0(factorName_n(colnames(FA_Results$scores)[i]), 
+                            "\n(", as.character(100*round(FA_Results$Vaccounted[2,i],2)), 
+                            "%)"),
+             size = text.size*4/3, col = "black") +
+    annotate("segment", x = spoke_x, xend = spoke_x + spoke_length, y = 1.025, yend = 1.025, 
+             color = mycolors, size = text.size/4) +
+    theme(plot.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"), 
+          axis.ticks=element_blank(),
+          axis.title=element_blank(),
+          axis.text=element_blank(), 
+          panel.grid = element_blank(),
+          panel.background = element_rect(fill = "white")) +
+    coord_polar()
+  
+  plot(ggp)
+  
+}
+
+```
+
+# Comparing Mental Health to Neighborhood Factors
+```{r}
+cdc_data <- read.csv("500_Cities__Census_Tract-level_Data__GIS_Friendly_Format_.csv")
+```
+```{r, fig.height=10, fig.width=10}
+
+t1 <- as.data.frame(cdc_data[,c("TractFIPS", "MHLTH_CrudePrev")])
+
+factor_scores <- cbind(rownames(FA_Results$scores), FA_Results$scores)
+t2 <- as.data.frame(factor_scores)
+
+merged <- as.matrix(merge(t1,t2, by = 1))
+rf <- colorRampPalette(brewer.pal(9,'YlOrRd'))
+
+R2.all.all <- matrix(nrow = 51, ncol = 0)
+# Smooth spline
+for(j in 3:(nfactors+2)){
+  R2.all <- matrix(nrow = 0, ncol = 1)
+  ss.all <- list()
+  col.all <- matrix(nrow = 0, ncol = 1)
+  
+  x <- as.numeric(merged[,j]) # factor score
+  y <- as.numeric(merged[,2]) # MH score
+  
+  layout(matrix(1:2,ncol=2), width = c(5,1),height = c(1,1))
+  par(bg = "white", col.axis = "black", col.lab = "black", col.main = "black", 
+      col.sub = "black", fg = "black", mar = c(3.5,4,1,1), ps = 10, tcl = 0.1, mgp=c(1,0,0))
+  plot(x, y, 
+       xlab = factorName(colnames(merged)[j]),
+       ylab = "Mental health not good for ≥ 14\ndays among adults aged ≥ 18 years", 
+       col = alpha("grey50", 0.2), pch = 16, cex = 0.5)
+  
+  for(k in 1:length(stateCodes)){
+    this.State <- merged[which(grepl(stateCodes[k], substr(merged[,1],1,2))),]
+    
+    this.x <- as.numeric(this.State[,j]) # factor score
+    this.y <- as.numeric(this.State[,2]) # MH score
+    
+    ss <- smooth.spline(this.x, this.y, df = 3, keep.data = T)
+    
+    TSS <- sum((this.y - mean(this.y))^2)
+    RSS <- sum((this.y - predict(ss, this.x)$y)^2)
+    R2 <- 1-(RSS/TSS)
+    
+    R2.all <- rbind(R2.all, R2)
+    col.all <- rbind(col.all, rf(100)[100 - (round(R2,2)*100)])
+    ss.all[[length(ss.all)+1]] <- ss
+  }
+  
+  
+  for(k in order(R2.all, decreasing = F)){
+    lines(ss.all[[k]], type = "l", col = col.all[k], lwd = 2.5)
+  }
+  
+  legend_image <- as.raster(matrix(rf(20), ncol=1))
+  par(bg = "white", col.axis = "black", col.lab = "black", col.main = "black",
+      col.sub = "black", fg = "black", mar = c(0,0,1,0), ps = 10, tcl = 0.1, mgp=c(1,0,0))
+  plot(c(0,2),c(0,1),type = 'n', axes = F, xlab = '', ylab = '')
+  text(x=0.6, y = seq(.75,0.25,l=11), labels = seq(1,0,l=11), adj = c(0, 0.5))
+  text(x = 0, y = 0.8, labels = expression(R^2), font = 2, adj = c(0, 0.5))
+  rasterImage(legend_image, 0, 0.25, 0.5,0.75)
+  rect(0, 0.25, 0.5,0.75, lwd = 2)
+  segments(0, seq(.75,0.25,l=11), x1 =0.55, lwd = 2)
+  
+  R2.all.all <- cbind(R2.all.all, R2.all)
+  colnames(R2.all.all)[j-2] <- factorName(colnames(merged)[j])
+}
+```
+```{r, fig.height=10, fig.width=10}
+par(mar = c(4,4,1,1), ps = 10, mgp = c(2,1,0), yaxs = "i")
+plot.new()
+plot.window(ylim = c(0, 1), xlim = c(0.5,5.5))
+rasterImage(legend_image, 0, 0, 6,1)
+rect(0, 0, 0.6, 1, col = "white", border = "white")
+rect(1.4, 0,1.6, 1, col = "white", border = "white")
+rect(2.4, 0,2.6, 1, col = "white", border = "white")
+rect(3.4, 0,3.6, 1, col = "white", border = "white")
+rect(4.4, 0,4.6, 1, col = "white", border = "white")
+rect(5.4, 0,6, 1, col = "white", border = "white")
+
+rect(0.6, 0, 1.4, quantile(R2.all.all[,1])[2], col = "white", border = "white")
+rect(1.6, 0, 2.4, quantile(R2.all.all[,2])[2], col = "white", border = "white")
+rect(2.6, 0, 3.4, quantile(R2.all.all[,3])[2], col = "white", border = "white")
+rect(3.6, 0, 4.4, quantile(R2.all.all[,4])[2], col = "white", border = "white")
+rect(4.6, 0, 5.4, quantile(R2.all.all[,5])[2], col = "white", border = "white")
+
+rect(0.6, quantile(R2.all.all[,1])[4], 1.4, 1, col = "white", border = "white")
+rect(1.6, quantile(R2.all.all[,2])[4], 2.4, 1, col = "white", border = "white")
+rect(2.6, quantile(R2.all.all[,3])[4], 3.4, 1, col = "white", border = "white")
+rect(3.6, quantile(R2.all.all[,4])[4], 4.4, 1, col = "white", border = "white")
+rect(4.6, quantile(R2.all.all[,5])[4], 5.4, 1, col = "white", border = "white")
+
+boxplot(R2.all.all, ylab = "R^2 value", las = 2, ylim = c(0,1), names = NA, add = T, col = "transparent", border = "black")
+labels <- colnames(R2.all.all)
+text(c(1:5), -0.02, labels = labels, srt = 15, 
+     adj = c(1,1), xpd = TRUE, cex=.9)
+```
+```{r}
+for (i in 1:5){
+  print(colnames(R2.all.all)[i])
+  print(paste("     First Quartile:", quantile(R2.all.all[,i])[2]))
+  print(paste("     Median:", median(R2.all.all[,i])))
+  print(paste("     Third Quartile:", quantile(R2.all.all[,i])[4]))
+  }
+```
+
+  
+```{r, fig.height=4, fig.width=4}
+par(mar = c(4,4,1,1), ps = 10, mgp = c(2,1,0), yaxs = "i")
+plot.new()
+plot.window(ylim = c(0, 1), xlim = c(0.5,5.5))
+rasterImage(legend_image, 0, 0, 6,1)
+rect(0, 0, 0.6, 1, col = "white", border = "white")
+rect(1.4, 0,1.6, 1, col = "white", border = "white")
+rect(2.4, 0,2.6, 1, col = "white", border = "white")
+rect(3.4, 0,3.6, 1, col = "white", border = "white")
+rect(4.4, 0,4.6, 1, col = "white", border = "white")
+rect(5.4, 0,6, 1, col = "white", border = "white")
+
+rect(0.6, 0, 1.4, quantile(R2.all.all[,1])[2], col = "white", border = "white")
+rect(1.6, 0, 2.4, quantile(R2.all.all[,2])[2], col = "white", border = "white")
+rect(2.6, 0, 3.4, quantile(R2.all.all[,3])[2], col = "white", border = "white")
+rect(3.6, 0, 4.4, quantile(R2.all.all[,4])[2], col = "white", border = "white")
+rect(4.6, 0, 5.4, quantile(R2.all.all[,5])[2], col = "white", border = "white")
+
+rect(0.6, quantile(R2.all.all[,1])[4], 1.4, 1, col = "white", border = "white")
+rect(1.6, quantile(R2.all.all[,2])[4], 2.4, 1, col = "white", border = "white")
+rect(2.6, quantile(R2.all.all[,3])[4], 3.4, 1, col = "white", border = "white")
+rect(3.6, quantile(R2.all.all[,4])[4], 4.4, 1, col = "white", border = "white")
+rect(4.6, quantile(R2.all.all[,5])[4], 5.4, 1, col = "white", border = "white")
+
+boxplot(R2.all.all, ylab = "R^2 value", las = 2, ylim = c(0,1), names = NA, add = T, col = "transparent", border = "black")
+labels <- colnames(R2.all.all)
+text(c(1:5), -0.04, labels = labels, srt = 20, 
+     adj = c(1,1), xpd = TRUE, cex=.9)
+```
+  
+  
+```{r, include=F, eval=F}
+for (i in 1:5){
+  hist(FA_Results$loadings[,i], breaks = 15, main = factorName(colnames(FA_Results$loadings)[i]))
+}
+
+```

@@ -1,0 +1,35 @@
+# History files
+.Rhistory
+.Rapp.history
+.DS_Store
+
+# Example code in package build process
+*-Ex.R
+
+# RStudio files
+.Rproj.user/
+
+# produced vignettes
+vignettes/*.html
+vignettes/*.pdf
+
+# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
+.httr-oauth
+
+# Heavy data files
+data
+
+# Old files
+old
+
+# Select output files
+output/*.*
+
+output/2015/4\ factors
+
+output/2015/*.*
+
+output/2015/5\ factors/bootstrap
+
+# Factor maps
+factor_maps
