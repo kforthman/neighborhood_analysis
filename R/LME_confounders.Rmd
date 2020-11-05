@@ -1,0 +1,183 @@
+---
+title: "LME_confounders"
+author: "Katie Forthman"
+date: "9/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(acs)
+require(stringr)
+require(e1071)
+require(psych)
+require(DMwR)
+require(randomcoloR)
+require(corrplot)
+require(ggplot2)
+require(lavaan)
+require(scales)
+require(RColorBrewer)
+require(GPArotation)
+
+library(lme4)
+library(lmerTest)
+library(EValue)
+library(sjPlot)
+library(patchwork)
+```
+
+```{r}
+# factor scores
+facts <- read.csv("../output/2015/5\ factors/FA_5Factors.csv")
+facts[,1] <- str_pad(facts[,1], 11, "left", pad="0")
+
+# BRFSS data
+cdc_data <- read.csv("../data/500_Cities__Census_Tract-level_Data__GIS_Friendly_Format_.csv")
+cdc_data_names <- as.matrix(read.csv("../data/500-Cities VAR CODES.csv", header = F))
+cdc_data[,4] <- str_pad(as.character(cdc_data[,4]), 11, "left", pad = 0)
+mh_data <- cdc_data[,c("TractFIPS","MHLTH_CrudePrev")]
+cdc_data <- cdc_data[,!(colnames(cdc_data) %in% c("X", "PlaceName", "PlaceFIPS", "Place_TractID", "population2010", "Geolocation", "MHLTH_CrudePrev"))]
+cdc_data <- cdc_data[,!grepl("_Crude95CI", colnames(cdc_data))]
+colnames(cdc_data) <- unlist(strsplit(colnames(cdc_data), "_CrudePrev"))
+cdc_data_names[,1]<- unlist(strsplit(cdc_data_names[,1], " "))
+colnames(cdc_data)[-1]
+colnames(cdc_data)[-1] <- cdc_data_names[,3][match(colnames(cdc_data)[-1], cdc_data_names[,1])]
+
+# varimax rotation default
+set.seed(1)
+pca_health <- pca(cdc_data[,-1], nfactors = ncol(cdc_data) - 1)
+print(pca_health$loadings)
+pca_data <- pca_health$scores[,c("RC1", "RC2", "RC3", "RC4")]
+pca_loads <- pca_health$loadings[,c("RC1", "RC2", "RC3", "RC4")]
+rm(pca_health)
+pca_data <- as.data.frame(pca_data)
+for(i in 1:4){
+  if(pca_loads[,i][which.max(abs(pca_loads[,i]))] < 0){
+    pca_data[,i] <- pca_data[,i] * -1
+    pca_loads[,i] <- pca_loads[,i] * -1
+  }
+}
+pca_data$tract <- cdc_data[,1]
+
+colnames(pca_data)[1] <- "Bad.Habit"
+colnames(pca_data)[2] <- "Chronic"
+colnames(pca_data)[3] <- "Fem.Health"
+colnames(pca_data)[4] <- "Prev.Serv"
+
+#print(pca_health$loadings)
+pca_loads <- as.data.frame(pca_loads)
+p1 <- ggplot(pca_loads, aes(x = RC1, y = rownames(pca_loads))) + geom_col() + xlab("Bad Habit") +
+  theme(axis.title.y=element_blank())
+p2 <- ggplot(pca_loads, aes(x = RC2, y = rownames(pca_loads))) + geom_col() + xlab("Chronic") +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+p3 <- ggplot(pca_loads, aes(x = RC3, y = rownames(pca_loads))) + geom_col() + xlab("Fem Health") +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+p4 <- ggplot(pca_loads, aes(x = RC4, y = rownames(pca_loads))) + geom_col() + xlab("Prev Serv") +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+```{r}
+jpeg(paste0("../plots/FigS14.jpeg"), 
+       width = 10, height = 5, units = "in", res = 500)
+(p1|p2|p3|p4)
+dev.off()
+
+(p1|p2|p3|p4)
+```
+
+```{r}
+# states
+stateName <- read.csv("../data/state_code.csv")
+stateName[,2] <- str_pad(as.character(stateName[,2]), 2, "left", pad = "0")
+
+facts$state <- substr(facts$X, 1, 2)
+facts$stateName <- stateName[match(facts$state, stateName[,2]),3]
+
+# put it all together
+all.data <- data.frame(
+  state = facts$stateName,
+  facts[,c("Affluence", "Singletons.in.Tract", "Seniors.in.Tract", "African.Americans.in.Tract", "Noncitizens.in.Tract")],
+  MHLTH_CrudePrev = mh_data[match(facts$X, mh_data$TractFIPS), "MHLTH_CrudePrev"],
+  pca_data[match(facts$X, pca_data$tract), !(colnames(pca_data) %in% "tract")]
+)
+```
+
+```{r}
+mycor <- cor(all.data[,c("Affluence", "Singletons.in.Tract", "Seniors.in.Tract", "African.Americans.in.Tract", "Noncitizens.in.Tract")], all.data[, c("Bad.Habit", "Chronic", "Fem.Health", "Prev.Serv")], use = "pair")
+#corrplot::corrplot(mycor, method = "ellipse")
+jpeg(paste0("../plots/FigS16.jpeg"), width = 3, height = 3, units = "in", res = 500)
+  corrplot(round(mycor,2), method = "ellipse", 
+           main = "", mar = c(0,0,0,1), tl.col = "black",
+           tl.cex = 0.5, cl.cex = 0.3, number.cex = 0.2)
+  corrplot(mycor, method = "number",  
+           add = T, main = "", mar = c(0,0,0,1), col = "black",
+          diag=TRUE,tl.pos="n", cl.pos="n", bg = NA, number.cex = 0.6)
+  dev.off()
+  
+    corrplot(round(mycor,2), method = "ellipse", 
+           main = "Correlation of Neighborhood Factors and \nPrincipal Components of Health", mar = c(0,0,4,0),
+           bg = NA, tl.col = "black")
+  corrplot(mycor, method = "number", add = T,
+           main = "", mar = c(0,0,2,0), col = "black",
+           diag=TRUE,tl.pos="n", cl.pos="n", bg = NA)
+```
+
+```{r}
+# Do the LME
+set.seed(2)
+this_lme <- lmer('MHLTH_CrudePrev ~ Affluence + Singletons.in.Tract + Seniors.in.Tract + African.Americans.in.Tract + Noncitizens.in.Tract +
+Bad.Habit + Chronic + Fem.Health + Prev.Serv +
+                 (1|state)', data = all.data)
+this_lme_sum <- summary(this_lme)
+this_lme_sum
+
+set.seed(3)
+this_lme_facts <- lmer('MHLTH_CrudePrev ~ Affluence + Singletons.in.Tract + Seniors.in.Tract + African.Americans.in.Tract + Noncitizens.in.Tract +  
+                 (1|state)', data = all.data)
+this_lme_sum_facts <- summary(this_lme_facts)
+this_lme_sum_facts
+
+set.seed(4)
+this_lme_pca <- lmer('MHLTH_CrudePrev ~  African.Americans.in.Tract +
+                 Bad.Habit + Chronic + Fem.Health + Prev.Serv +
+                 (1|state)', data = all.data)
+this_lme_sum_pca <- summary(this_lme_pca)
+this_lme_sum_pca
+```
+
+```{r}
+# e values
+
+eval <- data.frame(factor_name = c("Affluence", "Singletons.in.Tract", "Seniors.in.Tract", "African.Americans.in.Tract", "Noncitizens.in.Tract"))
+for(fac in c("Affluence", "Singletons.in.Tract", "Seniors.in.Tract", "African.Americans.in.Tract", "Noncitizens.in.Tract",
+             "Bad.Habit", "Chronic", "Fem.Health", "Prev.Serv")){
+  print(fac)
+  print(evalues.OLS(
+    est = this_lme_sum$coefficients[fac,"Estimate"],
+    se = this_lme_sum$coefficients[fac,"Std. Error"],
+    sd = sd(all.data[,fac], na.rm = T)
+  ))
+  message("\n\n")
+}
+```
+
+```{r}
+# forest plot
+jpeg(paste0("../plots/FigS15.jpeg"), 
+       width = 5, height = 3, units = "in", res = 500)
+plot_model(this_lme, title = "")
+dev.off()
+
+plot_model(this_lme, main = "Prevalence of Poor Mental Health")
+
+tab_model(this_lme)
+tab_model(this_lme_facts)
+tab_model(this_lme_pca)
+```
