@@ -4,7 +4,7 @@ require(stringr)
 require(leaflet)
 require(shiny)
 
-setwd("/Volumes/T1000/Analysis/kclary/Neighborhood_Analysis/Tract")
+setwd("/Volumes/T1000/Analysis/kforthman/Neighborhood_Analysis/Tract")
 
 source('R/factorName.R')
 
